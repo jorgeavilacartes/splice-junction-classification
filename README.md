@@ -1,6 +1,6 @@
 # Splice Junction Classification 
 ### Using deep learning
-Based on the work of Anastiasia Marzi, from Unimib.
+Based on Anastiasia Marzi's Thesis, from Unimib.
 
 ## `./01-data-preparation`
 Selection of train, validation and test sets.
@@ -15,8 +15,25 @@ This will output a file inside the folder 'data', `/data/datasets.json` containi
     - DNABERT (TODO)
 
 ### Train models `01-Train.ipynb`:
-1. Available architectures are includen at `/src/models`, you can add as many as you want.
-2.  
+1. Available architectures are included at `/src/models`, you can add as many as you want.
+2. The entire training process is included in this notebook: 
+    - Input representation. 
+    - Model selection
+    - Optimizer
+    - Output interpretation
 
+___ 
+# Create environment
+Create an environment called splice-junction
 
+```
+conda create --name splice-junction --file requirements.txt 
+```
 
+After clone the repo, and make sure you have properly installed dvc (included in the requirements), type 
+```
+dvc pull
+```
+to download the data into your local computer.
+
+Tested on Ubuntu 20.04, Python 3.8.10 64-bit
