@@ -1,6 +1,6 @@
 # Splice Junction Classification 
 ### Using deep learning
-Based on Anastiasia Marzi's Thesis, from Unimib.
+Based on Anastasia Marzi's Thesis, from Unimib.
 
 ## `./01-data-preparation`
 Selection of train, validation and test sets.
