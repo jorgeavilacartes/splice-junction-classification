@@ -1,3 +1,4 @@
+from functools import lru_cache
 import pandas as pd
 import random 
 from collections import (
@@ -7,6 +8,8 @@ from collections import (
 import gffutils
 from Bio import SeqIO
 from tqdm import tqdm
+
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 class AnnotationByExon: 
     """
@@ -30,7 +33,8 @@ class AnnotationByExon:
         
         # exon info
         self._get_exon_info()
-        
+    
+    @lru_cache
     def _load_annotations(self,):
         print("loading annotations")
         self.db = gffutils.FeatureDB(self.path_annotations, keep_order=True)
@@ -120,6 +124,7 @@ class SequencerSpliceJunction(AnnotationByExon):
         self.neg_samples = []
         self.pos_samples = []
 
+    @lru_cache
     def _load_fasta(self,): 
         """returns a dictionary with chromosome name as keys and his Sequence as values
         The returned sequence can be queried as a list
@@ -168,7 +173,6 @@ class SequencerSpliceJunction(AnnotationByExon):
 
         # sample 'k' starts positions of sequences
         starts_idx = random.sample(range(sample_from, sample_end), k)
-        #starts_idx = random.sample(range(donor_end - self.len_samples + 2, donor_end+1), self.k)
 
         return [(
             self.PosExon(j, donor_end+1), # subsequence donor exon
@@ -187,14 +191,11 @@ class SequencerSpliceJunction(AnnotationByExon):
         self.possample_id +=1
         return self.possample_id
     
-    def generate_positive_samples(self,chromosome=None, allow_empty=True, save=False):
+    def generate_positive_samples(self,chromosome=None, save=False):
         self.counter_pos = 0
         print("Generating positive samples")
-        if chromosome is None:
-            transcripts = self.get_all_transcripts()
-        else: 
-            self.neg_samples = []
-            transcripts = self.get_all_transcripts_by(chromosome)
+        self.neg_samples = []
+        transcripts = self.get_all_transcripts() if chromosome is None else self.get_all_transcripts_by(chromosome)
         
         for transcript in tqdm(transcripts): 
             
@@ -302,3 +303,70 @@ class SequencerSpliceJunction(AnnotationByExon):
         df = pd.DataFrame(self.pos_samples).merge(df_exon, right_on ="id_exoninfo", left_on = "id_exoninfo_donor",how="left")
         df = df.merge(df_exon, right_on ="id_exoninfo", left_on = "id_exoninfo_acceptor", how="left", suffixes = ("_d","_a"))
         df.to_csv(dirsave)
+
+    # -- Faster generation of positive samples
+    def positive_samples_from(self, transcript):
+        "Extract positive samples from a transcript (list of exons)"
+
+        # get all exons of the transcript in ascending order
+        exons_transcript = list(filter(lambda exon: exon.transcript_id == transcript , self.exon_info))
+        exons_transcript = sorted(exons_transcript, key=lambda exon: exon.exon_number, reverse=False)
+
+        # if 2 or more exons exists, generate positive samples
+        pairs_da = [(e_d,e_a) for e_d, e_a in zip(exons_transcript[:-1], exons_transcript[1:])]
+
+        if len(pairs_da)>0:
+            # collect positive samples for each pair (donor, acceptor)
+            list(map(self.extract_positive_samples, pairs_da))
+
+    def extract_positive_samples(self, pair_da):
+
+        # donor and acceptor exons
+        donor_exon, acceptor_exon = pair_da
+
+        # length of exons
+        len_donor = donor_exon.donor_idx - donor_exon.acceptor_idx
+        len_acceptor = acceptor_exon.donor_idx - acceptor_exon.acceptor_idx
+
+        # allows positive samples
+        alpha = min(self.len_samples -1, len_donor)# donor exon
+        beta  = min(self.len_samples -1, len_acceptor)# acceptor exon
+
+        #Verify if donor and acceptor exons satisfy length to extract sequence samples
+        if alpha + beta > self.len_samples:
+            self.counter_pos +=1
+            # indexes for positive samples
+            pos_idx = self.positive_samples(donor_start=donor_exon.acceptor_idx, donor_end=donor_exon.donor_idx, 
+                                            acceptor_start=acceptor_exon.acceptor_idx, acceptor_end=acceptor_exon.donor_idx,
+                                            alpha=alpha, beta=beta,)
+            
+            # generate sequences for each sample
+            for pos_donor_exon, pos_acceptor_exon in pos_idx:
+                seq_donor = self.sequence_from_chromosome(chromosome=donor_exon.chromosome, start=pos_donor_exon.start, end=pos_donor_exon.end)
+                seq_acceptor = self.sequence_from_chromosome(chromosome=acceptor_exon.chromosome, start=pos_acceptor_exon.start, end=pos_acceptor_exon.end)
+
+                # join donor and acceptor portions        
+                seq = seq_donor + seq_acceptor
+                sample = self.PositiveSample(self.new_negsample_id(), pos_donor_exon, pos_acceptor_exon, donor_exon.id_exoninfo, acceptor_exon.id_exoninfo, seq)
+                self.pos_samples.append(sample)
+
+        return ""
+
+    def generate_positive_samples_fast(self,chromosome: str, save=True):
+        "Generate positive samples using map() for faster computation"
+        
+        self.counter_pos = 0
+        print("Generating positive samples")
+        self.neg_samples = []
+        transcripts = self.get_all_transcripts() if chromosome is None else self.get_all_transcripts_by(chromosome)
+
+        with ThreadPoolExecutor(max_workers=24) as executor: 
+            list(tqdm(executor.map(self.positive_samples_from, transcripts), total=len(transcripts)))
+        
+        # with ProcessPoolExecutor(max_workers=30) as executor: 
+        #     list(tqdm(executor.map(self.positive_samples_from, transcripts), total=len(transcripts)))
+
+        if save is True: 
+            path_save = "data/positive_samples_chr_{}.csv".format(chromosome)
+            self.positive_samples_to_csv(path_save)        
+
